@@ -3,7 +3,8 @@ using System.IO;
 using StardewValley;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
-using System.Media;
+using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Audio;
 
 namespace Heartbeat
 {
@@ -11,24 +12,49 @@ namespace Heartbeat
     {
         private ModConfig Config;
 
-        private SoundPlayer _player;
-
-        private enum PlayingStatus : int
-        {
-            Not_Playing = 0,
-            Playing = 1,
-        }
-
-        private PlayingStatus isCurrentlyPlaying;
+        private SoundEffect soundEffect;
 
         public override void Entry(IModHelper helper)
         {
+            registerSoundEffect();
+
+            helper.Events.GameLoop.GameLaunched += GameLoop_GameLaunched;
+            helper.Events.GameLoop.UpdateTicked += GameLoop_UpdateTicked;
+        }
+
+        private void GameLoop_GameLaunched(object sender, GameLaunchedEventArgs e)
+        {
             Config = Helper.ReadConfig<ModConfig>();
 
-            string path = Path.Combine(helper.DirectoryPath, "assets", "human-heartbeat-daniel_simon.wav");
-            _player = new SoundPlayer(path);
+            var api = Helper.ModRegistry.GetApi<GenericModConfigMenuAPI>("spacechase0.GenericModConfigMenu");
 
-            helper.Events.GameLoop.UpdateTicked += GameLoop_UpdateTicked;
+            if (api == null) { return; }
+
+            api.RegisterModConfig(ModManifest, () => Config = new ModConfig(), () => Helper.WriteConfig(Config));
+            
+            api.RegisterSimpleOption(
+                ModManifest,
+                "Heartbeat Enabled",
+                "Enable Heartbeat mod.",
+                () => Config.HeartBeatEnabled,
+                (bool val) => Config.HeartBeatEnabled = val
+            );
+
+            api.RegisterSimpleOption(
+                ModManifest,
+                "Hearbeat Alert Percentage",
+                "What percent life total to beat at?",
+                () => Config.HeartBeatAlertPercent,
+                (float val) => Config.HeartBeatAlertPercent = val
+            );
+
+            api.RegisterSimpleOption(
+                ModManifest,
+                "Heart Tick Rate (bpm)",
+                "Human average is between 60 and 100.",
+                () => Config.HeartBeatHeartRate,
+                (float val) => Config.HeartBeatHeartRate = val
+            );
         }
 
         private void GameLoop_UpdateTicked(object sender, UpdateTickedEventArgs e)
@@ -37,35 +63,52 @@ namespace Heartbeat
 
             if (!Config.HeartBeatEnabled) { return; }
 
-            int playerHealth = Game1.player.health;
-            int maxHealth = Game1.player.maxHealth;
-            double currentHealth = Math.Round(((double)playerHealth / maxHealth * 100), 0);
+            double currentHealthPercent = Math.Round(((double)Game1.player.health / Game1.player.maxHealth * 100), 0);
+            
+            if (currentHealthPercent > Config.HeartBeatAlertPercent) { return; }
+            
+            double damageMultiplier = 1.0;
+            float  pitchModifier    = 0.0f;
+            float  panModifier      = 0.0f;
 
-            //Monitor.Log($"Current Health: {playerHealth}. \n" +
-            //    $"Max Health: {maxHealth}. \n" +
-            //    $"Health as percent: {currentHealth}. \n" +
-            //    $"Configured Health: {Config.HeartBeatAlertPercent}", LogLevel.Debug);
-
-            if (currentHealth <= Config.HeartBeatAlertPercent)
+            if (currentHealthPercent <= (Config.HeartBeatAlertPercent / 4))
             {
-                if (isCurrentlyPlaying == PlayingStatus.Playing) { return; }
-                
-                //Monitor.Log($"Current Health: {playerHealth}. \n" +
-                //    $"Max Health: {maxHealth}. \n" +
-                //    $"Health as percent: {currentHealth}. \n" +
-                //    $"Configured Health: {Config.HeartBeatAlertPercent}", LogLevel.Debug);
-
-                _player.PlayLooping();
-
-                isCurrentlyPlaying = PlayingStatus.Playing;
+                damageMultiplier = 2.5;
+                pitchModifier = 0.5f;
             }
-            else
+            else if(currentHealthPercent <= (Config.HeartBeatAlertPercent / 2))
             {
-                if (isCurrentlyPlaying == PlayingStatus.Not_Playing) { return; }
-
-                _player.Stop();
-                isCurrentlyPlaying = PlayingStatus.Not_Playing;
+                damageMultiplier = 2;
             }
+            else if(currentHealthPercent <= Config.HeartBeatAlertPercent / 1.33)
+            {
+                damageMultiplier = 1.5;
+            }
+
+            uint tickRate = (uint)Math.Round(Config.HeartBeatHeartRate / damageMultiplier);
+
+            if (! e.IsMultipleOf(tickRate)) { return; }
+
+            soundEffect.Play(Game1.options.soundVolumeLevel, pitchModifier, panModifier);
+        }
+    
+        private void registerSoundEffect()
+        {
+            string path = Path.Combine(Helper.DirectoryPath, "assets", "human-heartbeat-daniel_simon.wav");
+
+            FileStream stream = new FileStream(path, FileMode.Open);
+
+            try
+            { 
+                soundEffect = SoundEffect.FromStream(stream);
+            }
+            catch (Exception e)
+            {
+                Monitor.Log(e.Message, LogLevel.Error);
+            }
+
+            stream.Close();
+            stream.Dispose();
         }
     }
 }
